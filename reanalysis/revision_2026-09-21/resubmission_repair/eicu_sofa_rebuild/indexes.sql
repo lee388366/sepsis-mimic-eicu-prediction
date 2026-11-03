@@ -1,0 +1,2 @@
+BEGIN READ ONLY; SET LOCAL statement_timeout='180s'; SET LOCAL jit=off;
+SELECT tablename,indexdef FROM pg_indexes WHERE schemaname='eicu_crd' AND tablename IN ('nursecharting','respiratorycharting','intakeoutput','lab','patient','infusiondrug'); ROLLBACK;

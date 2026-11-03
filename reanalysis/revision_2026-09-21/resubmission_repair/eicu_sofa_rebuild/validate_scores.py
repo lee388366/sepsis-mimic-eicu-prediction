@@ -1,0 +1,20 @@
+from pathlib import Path
+import json,hashlib,numpy as np,pandas as pd
+H=Path(__file__).resolve().parent;ROOT=H.parents[2];R=ROOT/'revision_2026-09-13/landmark_trainonly_reanalysis'
+f=H/'data/eicu_sofa_strict48.csv';s=pd.read_csv(f,dtype={'uniquepid':str},true_values=['t'],false_values=['f']);z=np.load(R/'data/trainonly_eicu.npz',allow_pickle=False)
+assert len(s)==6812 and s.patientunitstayid.is_unique and set(s.patientunitstayid)==set(z['stay_id'])
+s=s.set_index('patientunitstayid').loc[z['stay_id']]
+assert np.array_equal(s.label.to_numpy(),z['y']) and np.array_equal(s.uniquepid.to_numpy(),z['uniquepid'])
+cols=['respiration','coagulation','liver','cardiovascular','cns','renal'];boundary=['lab_outside_n','pf_pair_outside_n','uo_outside_n','vaso_outside_n','gcs_outside_n','map_outside_n','support_outside_n']
+checks={'exact_frozen_ids':True,'exact_frozen_outcomes':True,'exact_frozen_uniquepid':True,'components_valid':all(s[c].dropna().isin(range(5)).all() for c in cols),'sum_components':(s[cols].fillna(0).sum(axis=1)==s.sofa_max_48h).all(),'boundary_all_zero':(s[boundary]==0).all().all(),'observed_flags':all(np.array_equal(s[c+'_observed'],s[c].notna()) for c in cols),'uo_coverage':s.uo_coverage_min.dropna().between(22,30).all() and s.uo_coverage_max.dropna().between(22,30).all(),'pf_lag':s.max_fio2_lag_min.dropna().between(0,240).all(),'support_lag':s.max_support_lag_min.dropna().between(0,240).all(),'conservative_uo_score_no_lower':(s.sofa_uo_conservative>=s.sofa_max_48h).all(),'one_hour_score_no_greater':(s.sofa_support_1h<=s.sofa_max_48h).all()}
+checks={k:bool(v) for k,v in checks.items()};assert all(checks.values()),checks
+old=pd.read_csv(ROOT.parent/'eicu_sofa.csv').set_index('patientunitstayid').loc[z['stay_id']]
+out={'n':len(s),'patients':int(s.uniquepid.nunique()),'deaths':int(s.label.sum()),'checks':checks,'new_csv_sha256':hashlib.sha256(f.read_bytes()).hexdigest(),'component_missing':{c:int(s[c].isna().sum()) for c in cols},'component_value_counts':{c:{str(k):int(v) for k,v in s[c].value_counts(dropna=False).sort_index().items()} for c in cols},'changed_components':{c:int((s[c].fillna(0)!=old[c]).sum()) for c in cols},'total_changes':{'changed':int((s.sofa_max_48h!=old.sofa_max_48h).sum()),'higher':int((s.sofa_max_48h>old.sofa_max_48h).sum()),'lower':int((s.sofa_max_48h<old.sofa_max_48h).sum()),'new_range':[int(s.sofa_max_48h.min()),int(s.sofa_max_48h.max())]},'source_QA':{},'uo_conservative_changed':int((s.sofa_uo_conservative!=s.sofa_max_48h).sum()),'support_1h_changed':int((s.sofa_support_1h!=s.sofa_max_48h).sum()),'boundary_sums':{c:int(s[c].sum()) for c in boundary}}
+for c in ['eligible_uo_endpoints','high_renal_uo_only','paired_pao2_n','invasive_pao2_n','support_unknown_pao2_n','unconverted_positive_vaso_n','medication_converted_vaso_n','admissionweight_used_n','nonnumeric_vaso_n','negative_uo_excluded_n','duplicate_uo_rows_removed','uo_generic_plus_channel_offsets','uo_nonadditive_offsets','uo_generic_nephro_ambiguous_offsets','uo_unknown_route_rows','uo_single_interval_determining_endpoints','epi_mgkgmin_positive_n','cv4_due_epi_mgkgmin_only']:
+ x=s[c].fillna(0);out['source_QA'][c]={'sum':int(x.sum()),'stays_positive':int((x>0).sum())}
+out['complete_six_components_n']=int(s[cols].notna().all(axis=1).sum())
+out['all_components_missing_n']=int(s[cols].isna().all(axis=1).sum())
+out['high_renal_uo_with_single_interval_determining_window_n']=int((s.high_renal_uo_only.fillna(False) & (s.uo_single_interval_determining_endpoints>0)).sum())
+out['uo_gap_h_quantiles']={str(k):float(v) for k,v in s.uo_max_gap_h.dropna().quantile([0,.25,.5,.75,.9,.95,.99,1]).items()}
+manifest=json.loads((H/'source_manifest.json').read_text());out['frozen_hashes_unchanged']={p:hashlib.sha256(Path(p).read_bytes()).hexdigest()==sha for p,sha in manifest['frozen_files'].items()};assert all(out['frozen_hashes_unchanged'].values())
+(H/'score_qa.json').write_text(json.dumps(out,indent=2,ensure_ascii=False));print(json.dumps(out,indent=2,ensure_ascii=False))
