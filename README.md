@@ -1,58 +1,65 @@
-# Final re-analysis (manuscript results)
+# Sequence models vs simple baselines for post-48h sepsis mortality prediction
 
-The scripts in this folder produced the results reported in the manuscript. The folder layout matches the layout in which the scripts were run, because the scripts locate their inputs relative to their own position:
+Analysis code for the manuscript:
 
-- `reanalysis/` corresponds to the analysis workspace.
-- The repository root corresponds to the project root, which holds the outputs of `../pipeline/` (see the top-level README).
+> **Sequence models do not outperform simple baselines for post-48h sepsis mortality prediction: a head-to-head comparison**
+> Tian T, Liu Y, Li H, Lu M, Sun Q, Li C, Du G, Li Y. (under review)
 
-Code comments and some console messages are in Chinese. The scripts never write to the source databases: every SQL query is read-only.
+Using routinely recorded data from hours 0–47 after ICU admission, the study predicts in-hospital death after hour 48 in adult patients with sepsis. It compares six models built on summary features (logistic regression, random forest, SVM, KNN, Gaussian naive Bayes, decision tree) with an attention-based bidirectional LSTM built on hourly sequences. SOFA and qSOFA are reference comparators. Models were developed and evaluated in **MIMIC-IV v3.1** and examined in an exploratory evaluation in **eICU-CRD v2.0**.
 
-## 1. Primary analysis: train-only preprocessing, 48-hour landmark cohort
+## Data access
 
-`revision_2026-09-13/landmark_trainonly_reanalysis/scripts/`
+This repository contains **code only**. It contains no patient-level data, no extracted or intermediate datasets, and no trained model files.
 
-Imputation means and standardisation parameters are fitted on the training partition only, and all seven models are retrained with the hyperparameters fixed in the original pipeline. Variant **A** is the primary cohort. Variant **B** is the restricted sensitivity cohort (suspected-infection time ≤ 48 h).
+The source databases are credentialed-access resources on PhysioNet:
 
-| Order | Script | Purpose |
+- MIMIC-IV v3.1 — https://doi.org/10.13026/kpb9-mt58
+- eICU-CRD v2.0 — https://doi.org/10.13026/C2WM1R
+
+To reproduce the analyses you must obtain PhysioNet credentialing, complete the required human-subjects training, and sign the relevant data use agreements. Then build local PostgreSQL copies of both databases, including the standard MIMIC-IV derived concepts (`mimiciv_derived`, from the MIT-LCP `mimic-code` repository) and the eICU derived concepts. Under the PhysioNet data use agreements, outputs that contain patient-level rows must not be redistributed.
+
+## Repository structure
+
+```
+pipeline/     Cohort extraction (SQL), feature assembly, model training and evaluation (Python)
+reanalysis/   Final analyses reported in the manuscript (see reanalysis/README.md)
+```
+
+### `pipeline/` — run order
+
+Run all scripts with the **repository root as the working directory** (for example `python pipeline/03_impute.py`), and save the CSV exports of the SQL queries there as well. The scripts read and write intermediate files (`*.csv`, `*.npz`) in the working directory and write tables to `tables/` and figures to `figures/`. The scripts in `reanalysis/` look for these outputs, and for the helper modules `split_utils.py` and `make_merged_predictions.py`, in the repository root. Before running them, copy those two modules from `pipeline/` to the root, or add `pipeline/` to `PYTHONPATH`.
+
+**MIMIC-IV (development cohort)**
+
+| Step | Scripts | Purpose |
 |---|---|---|
-| 0 | `s00_snapshot.py` | Snapshot of earlier outputs and environment (provenance) |
-| 1 | `s01_landmark_audit.py`, `eicu_cohort_index.sql` | 48-hour eligibility audit; cohort variants A/B; infection-timing distribution |
-| 2 | `s02_build_trainonly_data.py` | Train-only static imputation and scaling |
-| 3 | `s03_train_models.py A` / `B` | Retrain six summary-feature models and the attention BiLSTM |
-| 4 | `s04_internal_performance.py A` / `B` | Internal AUC/AP with subject-clustered bootstrap CIs, DeLong tests, calibration, decision curves, thresholds |
-| 5 | `s05_subgroup.py A` / `B` | Subgroups, paired differences, interaction tests |
-| 6 | `s06_lstm_seed_stability.py` | LSTM retraining across seeds 42–47 |
-| 7 | `s07_eicu_external.py A` / `B` | eICU-CRD evaluation; uniquepid-clustered CIs; patient-split recalibration |
-| 8 | `s08_explain.py A` / `B`, `s08b_occlusion_lowarm.py` | SHAP, attention, occlusion faithfulness, time-window ablation |
-| 9 | `s09_cv.py A` / `B` | Subject-level cross-validation (RF 10-fold, LSTM 5-fold) |
-| 10 | `s10_figures.py A` / `B`, `s25_regenerate_figures.py` | Figures |
-| 11 | `s11_compare.py`, `s15_old_vs_new_prediction_agreement.py` | Comparison with the earlier preprocessing pipeline |
-| 12 | `s12_finalize.py`, `s19_rebuild_table1.py` | Record-level calibration sensitivity analysis; Table 1 |
+| 1 | `01_sepsis_cohort.sql` | Sepsis-3 adult ICU cohort |
+| 2 | `02_extract_hourly.sql` | Hourly vital signs and laboratory values, hours 0–47 |
+| 3 | `04_labels.sql`, `04b_extract_sofa.sql`, `04c_extract_demographics.sql` | Outcome labels, SOFA/qSOFA inputs, demographics |
+| 4 | `03_impute.py`, `05_assemble_training_data.py`, `split_utils.py` | Imputation, sequence/summary feature assembly, subject-level split (70/15/15, seed 42) |
+| 5 | `06_train_baseline.py`, `06b_train_sequence.py`, `06_cross_validation.py`, `06b_cv_sequence.py`, `06c_ablate_timepoint.py` | Model training, cross-validation, time-point ablation |
+| 6 | `07_*.py`, `10_*.py`, `11_*.py` | Discrimination, bootstrap CIs (record- and subject-clustered), DeLong tests, calibration, decision curves, SOFA/qSOFA comparators, subgroups |
+| 7 | `08_*.py`, `09_*.py`, `12*.py`, `shap_cache.py` | SHAP and attention analyses, descriptive figures |
+| 8 | `make_table*.py`, `make_merged_predictions.py` | Summary tables |
 
-`common_eval.py` contains the shared metric, bootstrap and calibration functions.
+**eICU-CRD (exploratory external evaluation)**
 
-## 2. Time-bounded 48-hour SOFA comparators
+`eicu_01_cohort.sql` → `eicu_02_extract_hourly.sql` → `eicu_03_sofa_qsofa.sql` → `eicu_04b_extract_demographics.sql` → `eicu_04_assemble.py` → `eicu_05_impute.py` → `eicu_06_external_validate.py` → `eicu_07`–`eicu_09` (figures, subgroups, decision curves), and `07_calibration_dca_external.py`, `07e_bootstrap_eicu_patient.py`.
 
-`revision_2026-09-21/resubmission_repair/`
+> **Note:** `pipeline/` is the original end-to-end workflow. The numbers reported in the manuscript come from the final re-analysis in `reanalysis/`. That re-analysis fits imputation means and standardisation parameters on the training set only, retrains all seven models, and uses a time-bounded 48-hour SOFA comparator. Comments in some scripts are in Chinese.
 
-- `score_lineage/`: the MIMIC-IV SOFA, restricted to hours 0–47. `build_strict_sql.py` assembles `mimic_sofa_strict48.sql` from the MIT-LCP `mimic-code` concept queries (`official_*.sql`), and `run_strict_extract.py` executes it. The remaining scripts test the query against a synthetic dataset (`synthetic_strict48.sql`, `test_strict_sql_synthetic.py`) and run boundary and quality checks (`check_*.py`, `*_qa.sql`, `validate_new_scores.py`).
-- `eicu_sofa_rebuild/`: the eICU-CRD SOFA, restricted to hours 0–47. `build_score_sql.py` assembles `eicu_sofa_strict48.sql` from `cohort_cte.sql`, `score_body.sql` and the eICU-code pivoted concepts in `sources/`, and `run_extract.py` executes it. `validate_scores.py` and `independent_synthetic_review.py` run the checks.
-- `score_evaluation/evaluate_strict_sofa.py` and `eicu_score_evaluation/evaluate_eicu_sofa.py` evaluate the score comparators in MIMIC-IV and eICU-CRD.
-- `figures/` holds the scripts that redraw figures from frozen prediction arrays. They do no model fitting.
+## Environment
 
-## 3. Post hoc GCS recording and response-trajectory analyses
+The primary re-analysis used Python 3.13 with PyTorch 2.13.0, scikit-learn 1.9.0, NumPy 2.5.2, pandas 3.0.5, SciPy 1.18, SHAP 0.52 and Matplotlib 3.11 (see `requirements.txt`). The SQL scripts target PostgreSQL. Unless an analysis-specific seed is stated, seed 42 is used for data splitting, model training and bootstrap resampling.
 
-`revision_2026-09-13/dag_gcs_*`
+## Reporting
 
-These analyses did not retrain the prediction models.
+The study is reported following TRIPOD+AI.
 
-1. `dag_gcs_next_stage/`: read-only extraction of the cohort index, raw and derived GCS, RASS/CAM-ICU, sedative and opioid exposure, airway and ventilation records, and neurological diagnoses (`sql/`, `run_extract.sh`, QA scripts).
-2. `dag_gcs_mimic_interpretation/` (v1) and `dag_gcs_mimic_interpretation_v2/` (v2): GCS time-base tables with component provenance (`build_base_table.py`, `qa_base_table.py`). v2 corrects the alignment of the background variables.
-3. `dag_gcs_interpretation_analysis/` and `dag_gcs_treatment_analysis/`: clinical context of GCS recordings (RASS and treatment context). They read the v1 table, and the treatment analysis compares v1 with v2.
-4. `dag_gcs_fixed_window_trajectories/`: eye- and motor-score trajectories at 6, 12, 24, 36 and 48 h, with the 6- vs 48-hour paired comparison (subject-clustered bootstrap, seed 20260913). This analysis reads the v2 table.
+## Licence
 
-Several scripts verify SHA-256 hashes of their inputs against values recorded in the original environment. When re-running on a new extraction, remove or update those assertions.
+Code is released under the MIT Licence (see `LICENSE`). This licence does not cover the MIMIC-IV or eICU-CRD data, which remain subject to their PhysioNet licences and data use agreements.
 
-## Not included
+## Contact
 
-This folder contains no patient-level data, extracted datasets, trained models or figures. It also leaves out exploratory database probes used while designing the eICU SOFA rules, and helper scripts that synchronised results into manuscript files. Both are available from the corresponding author on request.
+Correspondence: Ge Du (duge492904559@163.com); Yanbing Li (cd_lyb@126.com).
