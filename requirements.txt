@@ -1,0 +1,10 @@
+# Versions used for the primary re-analysis (Python 3.13)
+torch==2.13.0
+scikit-learn==1.9.0
+numpy==2.5.2
+pandas==3.0.5
+scipy==1.18
+shap==0.52
+matplotlib==3.11
+statsmodels
+joblib
